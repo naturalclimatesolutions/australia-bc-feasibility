@@ -1,12 +1,6 @@
----
-title: "Modelling Blue carbon potential in South Australia"
-output: html_notebook
----
+# Modelling Blue carbon potential in South Australia
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
-code within the notebook, the results appear beneath the code.
-
-```{r install-packages, message=FALSE, warning=FALSE}
+# install-packages
 required_packages <- c("tidyverse", "terra", "smoothr", "pivottabler", "sf")
 for (package in required_packages) {
   if (!require(package, character.only = TRUE)) {
@@ -14,36 +8,36 @@ for (package in required_packages) {
     require(package, character.only = TRUE)
   }
 }
-```
 
-```{r set-temp-path}
+# set-temp-path
 # Location to save temporary files
-temp_dir = "bc-potential-intermediary-data"
+temp_dir <- "bc-potential-intermediary-data"
 terra::terraOptions(tempdir = temp_dir)
-```
 
-# 2.1 Calculating flooding extent and sea level rise
-To identify the maximum potential extent of potential future coastal wetlands, we extracted areas that fall between the 2020: MHWS tide level + 0 m SLR and 2100 : MHWS tide level + 1m SLR + 1% AEP storm surge level and wave set-up (MHWS 2020 minus ARI 2100 -> 'Full extent')
+# Calculating flooding extent and sea level rise To identify the maximum
+# potential extent of potential future coastal wetlands, we extracted areas that
+# fall between the 2020: MHWS tide level + 0 m SLR and 2100 : MHWS tide level +
+# 1m SLR + 1% AEP storm surge level and wave set-up (MHWS 2020 minus ARI 2100 ->
+# 'Full extent')
 
-Additional scenarios were also modelled:
-2020MHWS: MHWS tide level + 0 m SLR
-2020ARI:  MHWS tide level + 0 m SLR + 1% AEP storm surge level and wave set-up
-2050MHWS: MHWS tide level + 0.3m SLR
-2050ARI:  MHWS tide level + 0.3m SLR + 1% AEP storm surge level and wave set-up
-2100MHWS: MHWS tide level + 1m SLR
-2100ARI:  MHWS tide level + 1m SLR + 1% AEP storm surge level and wave set-up
- 2020MHWS minus  2020ARI
- 2050MHWS minus  2050ARI
- 2100MHWS minus  2100ARI
+# Additional scenarios were also modelled:
+# 2020MHWS: MHWS tide level + 0m SLR
+# 2020ARI:  MHWS tide level + 0m SLR+1% AEP storm surge level and wave set-up
+# 2050MHWS: MHWS tide level + 0.3m SLR
+# 2050ARI:  MHWS tide level + 0.3m SLR+1% AEP storm surge level and wave set-up
+# 2100MHWS: MHWS tide level + 1m SLR
+# 2100ARI:  MHWS tide level + 1m SLR+1% AEP storm surge level and wave set-up
+#  2020MHWS minus  2020ARI
+#  2050MHWS minus  2050ARI
+#  2100MHWS minus  2100ARI
 
-```{r define-flood-extent-function}
+# define-flood-extent-function
 WriteFloodExtentVector <- function(
     flood_data_path,
     area_code_col, min_tide_col, max_tide_col,
     area_code,
     dem_path,
-    out_dir, out_suffix
-  ) {
+    out_dir, out_suffix) {
   flood_data <- read.csv(flood_data_path)
   flood_data_sub <- flood_data %>%
     dplyr::filter(.data[[area_code_col]] == area_code) %>%
@@ -63,9 +57,8 @@ WriteFloodExtentVector <- function(
   )
   terra::writeVector(dem_reclassed_polygons, out_path, overwrite = TRUE)
 }
-```
 
-```{r run-flood-extents}
+# run-flood-extents
 flood_data_path <- "flood_data.csv" # file w Min_Tides, Max_Tides, Area_Code
 dem_dir <- "digital_elevation_models" # directory containing DEMs by area code
 out_dir <- "flood_extent_output" # directory for saving flood extent shapefiles
@@ -113,23 +106,36 @@ apply(parameters, 1, WriteFloodExtentVector)
 
 # Clean up
 do.call(file.remove, list(list.files(temp_dir, full.names = TRUE)))
-```
 
-# Running veg classification and carbon potential
-To estimate and compare the potential carbon capture and storage potential project sites across the South Australian coastline, we compared the extent of existing coastal wetland vegetation (pre-intervention/present day) to the predicted coastal wetland vegetation (based on land elevation) for post-intervention (blockage removed – and sea level rise) scenarios.
+# Running veg classification and carbon potential To estimate and compare the
+# potential carbon capture and storage potential project sites across the South
+# Australian coastline, we compared the extent of existing coastal wetland
+# vegetation (pre-intervention/present day) to the predicted coastal wetland
+# vegetation (based on land elevation) for post-intervention (blockage removed –
+# and sea level rise) scenarios.
 
-Pre-intervention scenario layers are constructed in ArcGIS with the following steps
-    - Relative carbon values applied to each habitat type in the feature layer for coastal wetland vegetation
-    - Feature layer converted to raster format, where raster value equals applied relative carbon values
-    - 'Extract by Mask' tool used to extract the above raster grid into each flood cell (with unique area code)
-    - Output: 'Pre-intervention' raster layer created for each flood cell/area code
+# Pre-intervention scenario layers are constructed in ArcGIS with the following
+# steps
+# - Relative carbon values applied to each habitat type in the feature layer for
+#   coastal wetland vegetation
+# - Feature layer converted to raster format, where raster value equals applied 
+#   relative carbon values
+# - 'Extract by Mask' tool used to extract the above raster grid into each flood
+#   cell (with unique area code)
+# - Output: 'Pre-intervention' raster layer created for each 
+#   flood cell/area code
 
-Post-intervention scenarios were constructed in R Studio (below), by reclassifying DEMs for each flood cell, with reclassification values relating to specific elevations bands for key wetland habitat types (veg classification), and constructed for years 2020, 2050 and 2100 by accounting for sea level rise.
+# Post-intervention scenarios were constructed in R Studio (below), by
+# reclassifying DEMs for each flood cell, with reclassification values relating
+# to specific elevations bands for key wetland habitat types (veg
+# classification), and constructed for years 2020, 2050 and 2100 by accounting
+# for sea level rise.
 
-Carbon potential (below) was calculated by subtracting the 'pre-intervention scenario' from 'post-intervention scenario' raster grid to estimate the difference in carbon capture and storage over time
+# Carbon potential (below) was calculated by subtracting the 'pre-intervention
+# scenario' from 'post-intervention scenario' raster grid to estimate the
+# difference in carbon capture and storage over time
 
-
-```{r define-carbon-potential-function}
+# define-carbon-potential-function
 CalculateCarbonPotential <- function(
     flood_data_path,
     pre_path,
@@ -140,8 +146,7 @@ CalculateCarbonPotential <- function(
     high_col,
     reclass_col,
     dem_path,
-    out_dir
-  ) {
+    out_dir) {
   flood_data <- read.csv(flood_data_path)
   pre_data <- read.csv(pre_path)
 
@@ -176,9 +181,8 @@ CalculateCarbonPotential <- function(
     terra::writeVector(potential_poly, shp_full, overwrite = TRUE)
   }
 }
-```
 
-```{r run-carbon-potential}
+# run-carbon-potential
 flood_data_path <- "flood_data.csv" # file containing LOW, HIGH, RECL, Area_Code
 dem_dir <- "digital_elevation_models" # directory containing DEMs by area code
 pre_path <- "veg_data"
@@ -189,7 +193,7 @@ flood_data <- read.csv(flood_data_path)
 area_codes <- unique(flood_data$Area_Code)
 dem_paths <- list.files(dem_path, full.names = TRUE)
 pre_paths <- list.files(pre_path, full.names = TRUE)
-# Order DEM & pre list by area code (assuming area_code is in the file name of DEM)
+# Order DEM & pre list by area code (assuming area_code is in file name of DEM)
 dem_paths[sapply(area_codes, function(x) {
   grep(x, dem_paths)
 })]
@@ -215,4 +219,3 @@ apply(parameters, 1, CalculateCarbonPotential)
 
 # Clean up
 do.call(file.remove, list(list.files(temp_dir, full.names = TRUE)))
-```
