@@ -1,0 +1,350 @@
+---
+title: "Modelling Blue carbon potential in South Australia"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
+code within the notebook, the results appear beneath the code.
+
+```{r install-packages, message=FALSE, warning=FALSE}
+required_packages <- c("tidyverse", "terra", "smoothr", "pivottabler", "sf")
+for (package in required_packages) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package, dependencies = TRUE)
+    require(package, character.only = TRUE)
+  }
+}
+```
+
+```{r set-temp-path}
+# Location to save temporary files
+temp_dir = "bc-potential-intermediary-data"
+terra::terraOptions(tempdir = temp_dir)
+```
+
+# Calculating flood extents
+Defining potential blue carbon boundaries based on largest potential difference
+MHWS 2020 minus ARI 2100
+
+```{r define-flood-extent-function}
+WriteFloodExtentVector <- function(
+    flood_data_path,
+    area_code_col, min_tide_col, max_tide_col,
+    area_code,
+    dem_path,
+    out_dir, out_suffix
+  ) {
+  flood_data <- read.csv(flood_data_path)
+  flood_data_sub <- flood_data %>%
+    dplyr::filter(.data[[area_code_col]] == area_code) %>%
+    dplyr::summarise(
+      min_tide = min(.data[[min_tide_col]], na.rm = TRUE),
+      max_tide = max(.data[[max_tide_col]], na.rm = TRUE)
+    ) %>%
+    dplyr::select(min_tide, max_tide)
+
+  flood_data_sub$reclass_value <- 1
+  dem <- terra::rast(dem_path)
+  dem_reclassed <- terra::classify(dem, flood_data_sub, others = NA)
+  dem_reclassed <- terra::classify(dem_reclassed, cbind(0, NA))
+  dem_reclassed_polygons <- terra::as.polygons(dem_reclassed)
+  out_path <- file.path(
+    out_dir, paste0("flood_extent_", area_code, "_", out_suffix, ".shp")
+  )
+  terra::writeVector(dem_reclassed_polygons, out_path, overwrite = TRUE)
+}
+```
+
+```{r run-flood-extents}
+flood_data_path <- "flood_data.csv" # file w Min_Tides, Max_Tides, Area_Code
+dem_dir <- "digital_elevation_models" # directory containing DEMs by area code
+out_dir <- "flood_extent_output" # directory for saving flood extent shapefiles
+
+# Load data
+flood_data <- read.csv(flood_data_path)
+area_codes <- unique(flood_data$Area_Code)
+dem_paths <- list.files(dem_path, full.names = TRUE)
+
+# Order DEM list by area code (assuming area_code is in the file name of DEM)
+dem_paths[sapply(area_codes, function(x) {
+  grep(x, dem_paths)
+})]
+
+# Set up df with parameter combinations
+flood_cells <- data.frame(
+  flood_data_path = flood_data_path,
+  area_code_col = "Area_Code",
+  area_code = area_codes,
+  dem_path = dem_paths,
+  out_dir = out_dir
+)
+
+min_tide_col <- list("X2020MHWS", "X2020MHWS", "X2050MHWS", "X2100MHWS")
+max_tide_col <- list("X2100ARI", "X2020ARI", "X2050ARI", "X2100ARI")
+out_suffix <- list("full_extent", "2020", "2050", "2100")
+scenarios <- cbind(min_tide_col, max_tide_col, out_suffix)
+
+# Create DF of all combo's of scenarios and flood cells
+parameters <- tidyr::expand_grid(flood_cells, scenarios)
+
+col_order <- c(
+  "flood_data_path",
+  "area_code_col",
+  "min_tide_col",
+  "max_tide_col",
+  "area_code",
+  "dem_path",
+  "out_dir",
+  "out_suffix"
+)
+parameters <- parameters[col_order]
+
+apply(parameters, 1, WriteFloodExtentVector)
+
+# Clean up
+do.call(file.remove, list(list.files(temp_dir, full.names = TRUE)))
+```
+
+# Running veg classification and carbon potential
+
+```{r define-carbon-potential-function}
+CalculateCarbonPotential <- function(
+    flood_data_path,
+    pre_path,
+    area_code_col,
+    area_code,
+    year_col,
+    low_col,
+    high_col,
+    reclass_col,
+    dem_path,
+    out_dir
+  ) {
+  flood_data <- read.csv(flood_data_path)
+  pre_data <- read.csv(pre_path)
+
+  for (year in c("2020", "2050", "2050")) {
+    flood_data_sub <- flood_data %>%
+      dplyr::filter((.data[[area_code_col]] == area_code) &
+        (.data[[year_col]] == year)) %>%
+      dplyr::select(low_col, high_col, reclass_col)
+
+    dem <- terra::rast(dem_path)
+    dem_reclassed <-
+      terra::classify(dem, flood_data_sub, others = NA)
+    dem_reclassed <- terra::classify(dem_reclassed, cbind(NA, 0))
+    pre_resampled <- terra::resample(pre_data, dem_reclassed)
+
+    potential <- dem_reclassified - pre_resampled
+    potential_poly <- terra::as.polygons(potential)
+
+    tif_path <- file.path(out_dir, "raster")
+    shp_path <- file.path(out_dir, "vector")
+    if (!file.exists(tif_path)) {
+      dir.create(tif_path, recursive = TRUE)
+    }
+    if (!file.exists(shp_path)) {
+      dir.create(shp_path, recursive = TRUE)
+    }
+    file_name <- paste0("c_potential_", area_code, "_by_", year)
+    tif_full <- file.path(tif_path, paste0(filename, ".tif"))
+    shp_full <- file.path(shp_path, paste0(filename, ".shp"))
+
+    terra::writeVector(potential, tif_full, overwrite = TRUE)
+    terra::writeVector(potential_poly, shp_full, overwrite = TRUE)
+  }
+}
+```
+
+```{r run-carbon-potential}
+flood_data_path <- "flood_data.csv" # file containing LOW, HIGH, RECL, Area_Code
+dem_dir <- "digital_elevation_models" # directory containing DEMs by area code
+pre_path <- "veg_data"
+out_dir <- "carbon_potential" # directory for saving output
+
+# Load data
+flood_data <- read.csv(flood_data_path)
+area_codes <- unique(flood_data$Area_Code)
+dem_paths <- list.files(dem_path, full.names = TRUE)
+pre_paths <- list.files(pre_path, full.names = TRUE)
+# Order DEM & pre list by area code (assuming area_code is in the file name of DEM)
+dem_paths[sapply(area_codes, function(x) {
+  grep(x, dem_paths)
+})]
+pre_paths[sapply(area_codes, function(x) {
+  grep(x, pre_paths)
+})]
+
+# Set up df with parameter combinations
+parameters <- data.frame(
+  flood_data_path = flood_data_path,
+  pre_path = pre_path,
+  area_code_col = "Area_Code",
+  area_code = area_codes,
+  year_col <- "Year",
+  low_col <- "LOW",
+  high_col <- "HIGH",
+  reclass_col <- "RECL",
+  dem_path = dem_paths,
+  out_dir = out_dir,
+)
+
+apply(parameters, 1, CalculateCarbonPotential)
+
+# Clean up
+do.call(file.remove, list(list.files(temp_dir, full.names = TRUE)))
+```
+
+# Intersecting
+Write explanatory text?
+
+Leftover text (consider removing?):
+Reclassifying DEMs for expected vegetation bands under 2020, 2050 and 2100
+Current vegetation classes reclassified from SA Coastal wetlands database
+Extract by mask was used in ArcPro Model Builder to create iterator function to
+process for each DEM boundary extent :) Calculating potential blue carbon
+habitat zonal statistics to calculate total sum of potential blue carbon in each
+patch
+
+```{python}
+# -*- coding: utf-8 -*-
+"""
+Generated by ArcGIS ModelBuilder on : 2022-05-30 18:19:13
+"""
+import arcpy
+import os
+
+def Tabulate_intersection_only():  # Tabulate_intersection_only
+
+    # To allow overwriting outputs change overwriteOutput option to True.
+    arcpy.env.overwriteOutput = False
+
+    toolbox_path = os.path.join(
+        "c:", 
+        "program files", 
+        "arcgis", 
+        "pro", 
+        "Resources", 
+        "ArcToolbox", 
+        "Conversion Tools.tbx"
+    )
+    arcpy.ImportToolbox(toolbox_path)
+    HOME = os.path.join("C:", "Users", "alice.howie", "Documents")
+    bc_polygons_shp = os.path.join(HOME, "bc_polygons.shp")
+    cons_areas_shp = os.path.join(HOME, "cons_areas.shp")
+
+    # Process: Tabulate Intersection (7) (Tabulate Intersection) (analysis)
+    tab_int_output = os.path.join(HOME, "BC.gdb", "tab_int_output")
+    scratch = os.path.join(HOME, "ArcGIS", "COMONFDTN_BLUE_CARBON_SA_05NOV.gdb")
+    with arcpy.EnvManager(
+        extent="MINOF", 
+        scratchWorkspace=scratch, 
+        workspace=scratch
+    ): arcpy.analysis.TabulateIntersection(
+        in_zone_features=bc_polygons_shp, 
+        zone_fields=["name"], 
+        in_class_features=cons_areas_shp, 
+        out_table=tab_int_output, 
+        class_fields=["RESNAME"], 
+        sum_fields=["SHAPE_Area"], 
+        xy_tolerance="", 
+        out_units="SQUARE_METERS"
+    )
+
+    # Process: Table To Excel (Table To Excel) (conversion)
+    tab_int_output_excel_csv = os.path.join(HOME, "tab_int_output_excel.csv")
+    arcpy.conversion.TableToExcel(
+        Input_Table=tab_int_output, 
+        Output_Excel_File=tab_int_output_excel_csv, 
+        Use_field_alias_as_column_header="NAME", 
+        Use_domain_and_subtype_description="CODE"
+    )
+
+if __name__ == '__main__':
+    # Global Environment settings
+    with arcpy.EnvManager(
+        scratchWorkspace=scratch, 
+        workspace=scratch
+    ): Tabulate_intersection_only()
+```
+
+# Projecting potential
+Write some summary / explanatory text,,,
+
+THIS NEXT SECTION HAS SOME HOLES STILL... Please edit if needed, or else remove?
+
+```{r project-potential-analysis}
+# Project feasibility model - shapefile
+# Polygon bounds defined as ARI - 2100 minus MHWS - 2020
+
+FE <- terra::vect("Flood_extents_erased_by_blockages.shp")
+f <- system.file("Flood_extents_erased_by_blockages.shp", package = "terra")
+p <- terra::vect(f)
+
+# next three lines not used?
+listvect <- list.files("Flood_extents_erased_by_blockages", pattern = ".shp$")
+allvect <- lapply(listvect, vect)
+allrast # ?
+
+# chop up by blockages layer
+# multipart to single part polygons
+FE <- terra::disagg(FE)
+
+# Calculate patch area
+FE$area_ha <- terra::expanse(FE, unit = "ha", transform = TRUE)
+
+# Remove patches <10HA
+
+# Drop crumbs
+# needs more annotation!
+area_thresh <- units::set_units(200, ha)
+p2020 <- smoothr::drop_crumbs(FE, threshold = area_thresh)
+
+# Polygon naming
+
+# FE
+
+# 'poly_drop' not defined in scope!
+poly_drop$BC_YR <- "BC_2020"
+poly_drop$Patch_number <- c(1:10)
+poly_drop$Patch_name <- paste(poly_drop$BC_YR, poly_drop$Patch_number, sep = "_")
+
+#   ## Running tabulate intersection in Python ##
+HOME <- file.path("C:", "Users", "alice.howie", "Documents")
+# is this df() from stats in next line?
+vessel <- df(
+  sf::st_read(
+    dsn = file.path(HOME, "test_BC.gdb"),
+    layer = "test_BC_tabular_intersection_py_output3"
+  )
+)
+
+# Calculate % habitat cover for each patch
+# Calculate % land ownership cover for each patch
+
+# table import
+land_tenure <- read.csv("LandTenure_parameters_SA_comon_feasibility_CSV.csv")
+
+# Calculate land ownership score for each patch - weighted arithmetic mean
+# Calculate % land use for each patch
+# table import
+land_use <- read.csv("LandUse_parameters_SA_comon_feasibility_CSV.csv")
+
+# Count cadastral parcels intersected for each patch
+
+tenure <- read.csv("PATCH_ANALYSIS_LAND_TENURE_TABLE_TableToExcel.csv")
+land_use <- read.csv("PATCH_ANALYSIS_LAND_USE_TABLE_TableToExcel.csv")
+
+tn <- tibble::as_tibble(tenure)
+lu <- tibble::as_tibble(land_use)
+
+# PIVOT TABLES
+h <- pivottabler::qhpvt(
+  tn,
+  "Patch_name",
+  "TENURE",
+  "PERCENTAGE",
+  format = "%.0f",
+  totals = "NONE"
+)
+```
